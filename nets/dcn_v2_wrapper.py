@@ -1,15 +1,12 @@
 import torch
 from torch.autograd import Function, gradcheck
 from torch.nn import Module
+import torch.nn as nn
 import dcn_op_v2
 
 class DeformableConv2DFunction(Function):
     @staticmethod
     def forward(ctx, input_tensor, weight, bias, offset, mask, stride, pad, dilation, deformable_groups):
-        assert type(input_tensor)==type(weight)==type(offset)==type(mask)==type(bias)==torch.Tensor
-        assert type(stride) == type(pad) == type(dilation)==tuple
-        assert len(stride) == len(pad) == len(dilation)==len(bias)==2
-        
         ctx.stride_h = stride[0]
         ctx.stride_w = stride[1]
         ctx.pad_h = pad[0]
@@ -50,6 +47,47 @@ class DeformableConv2DFunction(Function):
         
         return grad_input, grad_weight, grad_bias, grad_offset, grad_mask, \
             None, None, None, None
+
+class DeformableConv2DLayer(Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride,
+                 padding,
+                 dilation,
+                 deformable_groups):
+        super().__init__()
+        def typexam(x):
+            if type(x)==int:
+                return (x, x)
+            elif type(x)==tuple and len(x)==2:
+                return x
+            else:
+                raise TypeError
+        kernel_size = typexam(kernel_size)
+        stride = typexam(stride)
+        padding = typexam(padding)
+        dilation = typexam(dilation)
+        self.stride = stride
+        self.pad = padding
+        self.dilation = dilation
+        self.deformable_groups = deformable_groups
+        self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels, *kernel_size))
+        self.bias = nn.Parameter(torch.Tensor(out_channels))
+        self.conv_offset_mask = nn.Conv2d(in_channels,
+                                          self.deformable_groups * 3 * kernel_size[0] * kernel_size[1],
+                                          kernel_size=kernel_size,
+                                          stride=self.stride,
+                                          padding=self.pad,
+                                          bias=False)
+
+    def forward(self, inputs):
+        out = self.conv_offset_mask(inputs)
+        o1, o2, mask = torch.chunk(out, 3, dim=1)
+        offset = torch.cat((o1, o2), dim=1)
+        mask = torch.sigmoid(mask)
+        return DeformableConv2DFunction.apply(inputs, self.weight, self.bias, offset, mask, self.stride, self.pad, self.dilation, self.deformable_groups)
 
 if __name__ == "__main__":
     deformable_groups = 1

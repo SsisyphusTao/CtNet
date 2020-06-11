@@ -14,16 +14,11 @@ using namespace c10::cuda;
 Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
                          Tensor& bias,
                          Tensor& offset, Tensor& mask,
-                        //  int kernel_h, int kernel_w,
                          const int stride_h, const int stride_w,
                          const int pad_h, const int pad_w,
                          const int dilation_h, const int dilation_w,
                          const int deformable_group)
 {
-    // THCAssertSameGPU(Tensor_checkGPU(state, 8, input, weight, bias, ones, offset, mask, output, columns));
-    // THArgCheck(Tensor_isContiguous(state, input), 1, "input tensor has to be contiguous");
-    // THArgCheck(Tensor_isContiguous(state, weight), 2, "weight tensor has to be contiguous");
-    
     const int batch = input.size(0);
     const int channels = input.size(1);
     const int height = input.size(2);
@@ -33,23 +28,9 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
     // const int channels_kernel = weight.size(1);
     const int kernel_h = weight.size(2);
     const int kernel_w = weight.size(3);
-    // if (kernel_h_ != kernel_h || kernel_w_ != kernel_w)
-    //     c10::Error("Input shape and kernel shape wont match: (%d x %d vs %d x %d).", 
-    //     kernel_h_, kernel_w, kernel_h_, kernel_w_);
-    // if (channels != channels_kernel)
-    //     c10::Error("Input shape and kernel channels wont match: (%d vs %d).", 
-    //     channels, channels_kernel);
 
     const int height_out = (height + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
     const int width_out = (width + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
-
-    // if (Tensor_nDimension(state, ones) != 2 ||
-    //     Tensor_size(state, ones, 0) * Tensor_size(state, ones, 1) < height_out * width_out)
-    // {
-    //     // Resize plane and fill with ones...
-    //     Tensor_resize2d(state, ones, height_out, width_out);
-    //     Tensor_fill(state, ones, 1);
-    // }
 
     // Tensor ones = input.new_full({height_out * width_out, 1}, 1);
     Tensor columns = input.new_empty({channels * kernel_h * kernel_w, 1 * height_out * width_out});
@@ -57,24 +38,10 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
     columns.to(input.device());
     // bias.unsqueeze_(0);
 
-    // resize output
-    // Tensor_resize4d(state, output, batch, channels_out, height_out, width_out);
-    // resize temporary columns
-    // Tensor_resize2d(state, columns, channels * kernel_h * kernel_w, 1 * height_out * width_out);
-    
-    // Tensor *input_n = Tensor_new(state);
-    // Tensor *offset_n = Tensor_new(state);
-    // Tensor *mask_n = Tensor_new(state);
-    // Tensor *output_n = Tensor_new(state);
     vector<Tensor> output_slice;
 
     for (int b = 0; b < batch; b++)
     {
-        // Tensor_select(state, input_n, input, 0, b);
-        // Tensor_select(state, offset_n, offset, 0, b);
-        // Tensor_select(state, mask_n, mask, 0, b);
-        // Tensor_select(state, output_n, output, 0, b);
-
         Tensor input_n = input.slice(0, b, b+1).squeeze_();
         Tensor offset_n = offset.slice(0, b, b+1).squeeze_();
         Tensor mask_n = mask.slice(0, b, b+1).squeeze_();
@@ -110,33 +77,19 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, output_n), n);
         output_slice.push_back(at::mm(weight.flatten(1),columns).resize_({weight.size(0), height_out, width_out}));
     }
-    // Tensor_free(state, input_n);
-    // Tensor_free(state, offset_n);
-    // Tensor_free(state, mask_n);
-    // Tensor_free(state, output_n);
     at::TensorList output = at::TensorList(output_slice);
     return at::stack(output);
 }
 
 vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
-                          Tensor& bias, //Tensor& ones,
+                          Tensor& bias,
                           Tensor& offset, Tensor& mask,
-                          //Tensor& columns,
-                        //   Tensor& grad_input, Tensor& grad_weight,
-                        //   Tensor& grad_bias, Tensor& grad_offset,
-                        //   Tensor& grad_mask, 
                           Tensor& grad_output,
-                        //   int kernel_h, int kernel_w,
                           int stride_h, int stride_w,
                           int pad_h, int pad_w,
                           int dilation_h, int dilation_w,
                           int deformable_group)
 {
-    // THCAssertSameGPU(Tensor_checkGPU(state, 13, input, weight, bias, ones, offset, mask, columns,
-    //                                        grad_input, grad_weight, grad_bias, grad_offset, grad_mask, grad_output));
-    // THArgCheck(Tensor_isContiguous(state, input), 1, "input tensor has to be contiguous");
-    // THArgCheck(Tensor_isContiguous(state, weight), 2, "weight tensor has to be contiguous");
-
     const int batch = input.size(0);
     const int channels = input.size(1);
     const int height = input.size(2);
@@ -146,35 +99,10 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
     // const int channels_kernel = weight.size(1);
     const int kernel_h = weight.size(2);
     const int kernel_w = weight.size(3);
-    // if (kernel_h_ != kernel_h || kernel_w_ != kernel_w)
-    //     c10::Error("Input shape and kernel shape wont match: (%d x %d vs %d x %d).", 
-    //     kernel_h_, kernel_w, kernel_h_, kernel_w_);
-    // if (channels != channels_kernel)
-    //     c10::Error("Input shape and kernel channels wont match: (%d vs %d).", 
-    //     channels, channels_kernel);
 
     const int height_out = (height + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
     const int width_out = (width + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
 
-    // if (Tensor_nDimension(state, ones) != 2 ||
-    //     Tensor_size(state, ones, 0) * Tensor_size(state, ones, 1) < height_out * width_out)
-    // {
-    //     // Resize plane and fill with ones...
-    //     Tensor_resize2d(state, ones, height_out, width_out);
-    //     Tensor_fill(state, ones, 1.0f);
-    // }
-
-    // Tensor_resize4d(state, grad_input, batch, channels, height, width);
-    // Tensor_resize2d(state, columns, channels * kernel_h * kernel_w, height_out * width_out);
-
-    // Tensor *input_n = Tensor_new(state);
-    // Tensor *offset_n = Tensor_new(state);
-    // Tensor *mask_n = Tensor_new(state);
-
-    // Tensor *grad_output_n = Tensor_new(state);
-    // Tensor *grad_input_n = Tensor_new(state);
-    // Tensor *grad_offset_n = Tensor_new(state);
-    // Tensor *grad_mask_n = Tensor_new(state);
     vector<Tensor> grad_input_list;
     Tensor grad_weight = weight.new_zeros(weight.sizes()).flatten(1);
     Tensor grad_bias = bias.new_zeros(bias.sizes());
@@ -183,14 +111,6 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
 
     for (int b = 0; b < batch; b++)
     {
-        // Tensor_select(state, input_n, input, 0, b);
-        // Tensor_select(state, offset_n, offset, 0, b);
-        // Tensor_select(state, mask_n, mask, 0, b);
-        // Tensor_select(state, grad_output_n, grad_output, 0, b);
-        // Tensor_select(state, grad_input_n, grad_input, 0, b);
-        // Tensor_select(state, grad_offset_n, grad_offset, 0, b);
-        // Tensor_select(state, grad_mask_n, grad_mask, 0, b);
-
         Tensor input_n = input.slice(0, b, b+1).squeeze_();
         Tensor offset_n = offset.slice(0, b, b+1).squeeze_();
         Tensor mask_n = mask.slice(0, b, b+1).squeeze_();
@@ -267,22 +187,11 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
         grad_offset_list.push_back(grad_offset_n);
         grad_mask_list.push_back(grad_mask_n);
     }
-
-    // Tensor_free(state, input_n);
-    // Tensor_free(state, offset_n);
-    // Tensor_free(state, mask_n);
-
-    // Tensor_free(state, grad_output_n);
-    // Tensor_free(state, grad_input_n);
-    // Tensor_free(state, grad_offset_n);
-    // Tensor_free(state, grad_mask_n);
-    vector<Tensor> output;
-    output.push_back(at::stack(at::TensorList(grad_input_list)).resize_(input.sizes()));
-    output.push_back(grad_weight.resize_(weight.sizes()));
-    output.push_back(grad_bias);
-    output.push_back(at::stack(at::TensorList(grad_offset_list)).resize_(offset.sizes()));
-    output.push_back(at::stack(at::TensorList(grad_mask_list)).resize_(mask.sizes()));
-    return output;
+    return {at::stack(at::TensorList(grad_input_list)).resize_(input.sizes()),
+            grad_weight.resize_(weight.sizes()),
+            grad_bias,
+            at::stack(at::TensorList(grad_offset_list)).resize_(offset.sizes()),
+            at::stack(at::TensorList(grad_mask_list)).resize_(mask.sizes())};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
