@@ -3,6 +3,7 @@ from torch.autograd import Function, gradcheck
 from torch.nn import Module
 import torch.nn as nn
 import dcn_op_v2
+import math
 
 class DeformableConv2DFunction(Function):
     @staticmethod
@@ -80,7 +81,21 @@ class DeformableConv2DLayer(Module):
                                           kernel_size=kernel_size,
                                           stride=self.stride,
                                           padding=self.pad,
-                                          bias=False)
+                                          bias=True)
+        self.reset_parameters(in_channels, kernel_size)
+        self.init_offset()
+
+    def init_offset(self):
+        self.conv_offset_mask.weight.data.zero_()
+        self.conv_offset_mask.bias.data.zero_()
+
+    def reset_parameters(self, in_channels, kernel_size):
+        n = in_channels
+        for k in kernel_size:
+            n *= k
+        stdv = 1. / math.sqrt(n)
+        self.weight.data.uniform_(-stdv, stdv)
+        self.bias.data.zero_()
 
     def forward(self, inputs):
         out = self.conv_offset_mask(inputs)

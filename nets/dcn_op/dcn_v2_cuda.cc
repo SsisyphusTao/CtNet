@@ -32,13 +32,10 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
     const int height_out = (height + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
     const int width_out = (width + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
 
-    // Tensor ones = input.new_full({height_out * width_out, 1}, 1);
-    Tensor columns = input.new_empty({channels * kernel_h * kernel_w, 1 * height_out * width_out});
-    // ones.to(input.device());
-    columns.to(input.device());
-    // bias.unsqueeze_(0);
+    Tensor ones = input.new_full({1, height_out * width_out}, 1, {input.device()});
+    Tensor columns = input.new_empty({channels * kernel_h * kernel_w, 1 * height_out * width_out}, {input.device()});
 
-    vector<Tensor> output_slice;
+    vector<Tensor> outputs;
 
     for (int b = 0; b < batch; b++)
     {
@@ -57,7 +54,7 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, ones), k_,
         //                  Tensor_data(state, bias), k_, 0.0f,
         //                  Tensor_data(state, output_n), n_);
-
+        Tensor output_n = at::mm(bias.unsqueeze(1),ones);
         modulated_deformable_im2col_cuda(getCurrentCUDAStream(),
                                          input_n.data_ptr<float>(), offset_n.data_ptr<float>(),
                                          mask_n.data_ptr<float>(),
@@ -75,10 +72,10 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, columns), n,
         //                  Tensor_data(state, weight), k, 1.0f,
         //                  Tensor_data(state, output_n), n);
-        output_slice.push_back(at::mm(weight.flatten(1),columns).resize_({weight.size(0), height_out, width_out}));
+        output_n.addmm_(weight.flatten(1),columns);
+        outputs.push_back(output_n.resize_({weight.size(0), height_out, width_out}));
     }
-    at::TensorList output = at::TensorList(output_slice);
-    return at::stack(output);
+    return at::stack(at::TensorList(outputs));
 }
 
 vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
@@ -102,6 +99,8 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
 
     const int height_out = (height + 2 * pad_h - (dilation_h * (kernel_h - 1) + 1)) / stride_h + 1;
     const int width_out = (width + 2 * pad_w - (dilation_w * (kernel_w - 1) + 1)) / stride_w + 1;
+
+    Tensor ones = input.new_full({height_out * width_out}, 1, {input.device()});
 
     vector<Tensor> grad_input_list;
     Tensor grad_weight = weight.new_zeros(weight.sizes()).flatten(1);
@@ -172,6 +171,7 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, grad_weight), n_);
 
         grad_weight.addmm_(grad_output_n.flatten(1), columns.flatten(1).t_());
+        grad_bias.addmv_(grad_output_n.flatten(1), ones);
 
         // gradient w.r.t. bias
         // long m_ = channels_out;
