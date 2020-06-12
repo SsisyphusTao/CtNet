@@ -2,7 +2,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from . import coco
+import pycocotools.coco as coco
 import numpy as np
 import torch
 import json
@@ -18,9 +18,9 @@ class PascalVOC(data.Dataset):
   std  = np.array([0.229, 0.224, 0.225],
                    dtype=np.float32).reshape(1, 1, 3)
   
-  def __init__(self, opt, split):
+  def __init__(self, data_dir, split):
     super(PascalVOC, self).__init__()
-    self.data_dir = os.path.join(opt.data_dir, 'voc')
+    self.data_dir = os.path.join(data_dir, 'VOCdevkit')
     self.img_dir = os.path.join(self.data_dir, 'images')
     _ann_name = {'train': 'trainval0712', 'val': 'test2007'}
     self.annot_path = os.path.join(
@@ -42,7 +42,6 @@ class PascalVOC(data.Dataset):
         [-0.56089297, 0.71832671, 0.41158938]
     ], dtype=np.float32)
     self.split = split
-    self.opt = opt
 
     print('==> initializing pascal {} data.'.format(_ann_name[split]))
     self.coco = coco.COCO(self.annot_path)
@@ -80,3 +79,4 @@ class PascalVOC(data.Dataset):
     self.save_results(results, save_dir)
     os.system('python tools/reval.py ' + \
               '{}/results.json'.format(save_dir))
+  name = 'PascalVOC'

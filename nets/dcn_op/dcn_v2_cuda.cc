@@ -39,9 +39,9 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
 
     for (int b = 0; b < batch; b++)
     {
-        Tensor input_n = input.slice(0, b, b+1).squeeze_();
-        Tensor offset_n = offset.slice(0, b, b+1).squeeze_();
-        Tensor mask_n = mask.slice(0, b, b+1).squeeze_();
+        Tensor input_n = input.slice(0, b, b+1).squeeze();
+        Tensor offset_n = offset.slice(0, b, b+1).squeeze();
+        Tensor mask_n = mask.slice(0, b, b+1).squeeze();
 
         // Do Bias first:
         // M,N,K are dims of matrix A and B
@@ -110,10 +110,10 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
 
     for (int b = 0; b < batch; b++)
     {
-        Tensor input_n = input.slice(0, b, b+1).squeeze_();
-        Tensor offset_n = offset.slice(0, b, b+1).squeeze_();
-        Tensor mask_n = mask.slice(0, b, b+1).squeeze_();
-        Tensor grad_output_n = grad_output.slice(0, b, b+1).squeeze_();
+        Tensor input_n = input.slice(0, b, b+1).squeeze();
+        Tensor offset_n = offset.slice(0, b, b+1).squeeze();
+        Tensor mask_n = mask.slice(0, b, b+1).squeeze();
+        Tensor grad_output_n = grad_output.slice(0, b, b+1).squeeze();
         Tensor grad_input_n = input_n.new_zeros(input_n.sizes());
         Tensor grad_offset_n = offset_n.new_zeros(offset_n.sizes());
         Tensor grad_mask_n = mask_n.new_zeros(mask_n.sizes());
@@ -126,7 +126,7 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, grad_output_n), n,
         //                  Tensor_data(state, weight), m, 0.0f,
         //                  Tensor_data(state, columns), n);
-        Tensor columns = at::mm(weight.flatten(1).t_(), grad_output_n.flatten(1));
+        Tensor columns = at::mm(weight.flatten(1).t(), grad_output_n.flatten(1));
 
         // gradient w.r.t. input coordinate data
         modulated_deformable_col2im_coord_cuda(getCurrentCUDAStream(),
@@ -170,7 +170,7 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, grad_output_n), k_, 1.0f,
         //                  Tensor_data(state, grad_weight), n_);
 
-        grad_weight.addmm_(grad_output_n.flatten(1), columns.flatten(1).t_());
+        grad_weight.addmm_(grad_output_n.flatten(1), columns.flatten(1).t());
         grad_bias.addmv_(grad_output_n.flatten(1), ones);
 
         // gradient w.r.t. bias
