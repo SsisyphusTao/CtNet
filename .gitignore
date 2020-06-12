@@ -5,3 +5,5 @@ cpp/
 *dist/
 *__pycache__
 *.pth
+*.jpeg
+*.jpg

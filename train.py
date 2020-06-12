@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(
 train_set = parser.add_mutually_exclusive_group()
 parser.add_argument('--dataset_root', default=osp.join(osp.expanduser('~'),'data'),
                     help='Path of training set')
-parser.add_argument('--batch_size', default=32, type=int,
+parser.add_argument('--batch_size', default=64, type=int,
                     help='Batch size for training')
 parser.add_argument('--resume', type=str,
                     help='Checkpoint state_dict file to resume training from')
@@ -24,7 +24,7 @@ parser.add_argument('--start_iter', default=0, type=int,
                     help='Resume training at this iter')
 parser.add_argument('--num_workers', default=16, type=int,
                     help='Number of workers used in dataloading')
-parser.add_argument('--lr', '--learning-rate', default=1e-2, type=float,
+parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     help='initial learning rate')
 parser.add_argument('--save_folder', default='checkpoints/',
                     help='Directory for saving checkpoint models')
@@ -59,12 +59,12 @@ def train():
     start_time = time.time()
     dataset = get_dataset()
     heads = {'hm': dataset.num_classes,
-             'wh': 2 * dataset.num_classes,
+             'wh': 2,
              'reg': 2}
     net = get_pose_net(50, heads)
     if args.resume:
         missing, unexpected = net.load_state_dict({k.replace('module.',''):v 
-        for k,v in torch.load(args.resume).items()}, strict=False)
+        for k,v in torch.load(args.resume).items()})
         if missing:
             print('Missing:', missing)
         if unexpected:
