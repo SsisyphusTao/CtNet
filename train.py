@@ -14,15 +14,15 @@ parser = argparse.ArgumentParser(
 train_set = parser.add_mutually_exclusive_group()
 parser.add_argument('--dataset_root', default=osp.join(osp.expanduser('~'),'data'),
                     help='Path of training set')
-parser.add_argument('--batch_size', default=64, type=int,
+parser.add_argument('--batch_size', default=128, type=int,
                     help='Batch size for training')
 parser.add_argument('--resume', type=str,
                     help='Checkpoint state_dict file to resume training from')
-parser.add_argument('--epochs', default=100, type=int,
+parser.add_argument('--epochs', default=200, type=int,
                     help='the number of training epochs')
 parser.add_argument('--start_iter', default=0, type=int,
                     help='Resume training at this iter')
-parser.add_argument('--num_workers', default=16, type=int,
+parser.add_argument('--num_workers', default=32, type=int,
                     help='Number of workers used in dataloading')
 parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     help='initial learning rate')
@@ -73,11 +73,13 @@ def train():
     net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3])
     torch.backends.cudnn.benchmark = True
 
-    optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    # optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9,
+                          weight_decay=5e-4)
     for param_group in optimizer.param_groups:
         param_group['initial_lr'] = args.lr
-    # adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [120, 180], 0.1, args.start_iter)
-    adjust_learning_rate = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, args.start_iter)
+    adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [120, 180], 0.1, args.start_iter)
+    # adjust_learning_rate = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, args.start_iter)
     criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1,2,3])
 
     print('Loading the dataset...')
@@ -97,10 +99,10 @@ def train():
         adjust_learning_rate.step()
         if (not (iteration-args.start_iter) == 0 and iteration % 10 == 0):
             print('Saving state, iter:', iteration)
-            torch.save(net.state_dict(), args.save_folder + 'ctnet_res50_' +
+            torch.save(net.state_dict(), args.save_folder + 'ctnet_res18_' +
                        repr(iteration) + loss + '.pth')
     torch.save(net.state_dict(),
-                args.save_folder + 'ctnet_res50_end' + loss + '.pth')
+                args.save_folder + 'ctnet_res18_end' + loss + '.pth')
     end_time=time.time()
     print('Time spend: %d' % (time.gmtime(end_time).tm_yday-time.gmtime(start_time).tm_yday), time.strftime('%H:%M:%S', time.gmtime(end_time-start_time)))
 

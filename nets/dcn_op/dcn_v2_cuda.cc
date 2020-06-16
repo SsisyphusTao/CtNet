@@ -61,7 +61,7 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
                                          1, channels, height, width,
                                          height_out, width_out, kernel_h, kernel_w,
                                          pad_h, pad_w, stride_h, stride_w, dilation_h, dilation_w,
-                                         deformable_group, columns.data_ptr<float>());
+                                         deformable_group, columns.data_ptr<float>()); 
 
         //(k * m)  x  (m * n)
         // Y = WC
@@ -72,7 +72,7 @@ Tensor dcn_v2_cuda_forward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, columns), n,
         //                  Tensor_data(state, weight), k, 1.0f,
         //                  Tensor_data(state, output_n), n);
-        output_n.addmm_(weight.flatten(1),columns);
+        output_n = output_n.addmm(weight.flatten(1),columns);
         outputs.push_back(output_n.resize_({weight.size(0), height_out, width_out}));
     }
     return at::stack(at::TensorList(outputs));
@@ -170,8 +170,8 @@ vector<at::Tensor> dcn_v2_cuda_backward(Tensor& input, Tensor& weight,
         //                  Tensor_data(state, grad_output_n), k_, 1.0f,
         //                  Tensor_data(state, grad_weight), n_);
 
-        grad_weight.addmm_(grad_output_n.flatten(1), columns.flatten(1).t());
-        grad_bias.addmv_(grad_output_n.flatten(1), ones);
+        grad_weight = grad_weight.addmm(grad_output_n.flatten(1), columns.flatten(1).t());
+        grad_bias = grad_bias.addmv(grad_output_n.flatten(1), ones);
 
         // gradient w.r.t. bias
         // long m_ = channels_out;
