@@ -89,8 +89,8 @@ class CtdetLoss(torch.nn.Module):
     off_loss = self.crit_reg(output['reg'], batch['reg_mask'],
                           batch['ind'], batch['reg'])
         
-    loss = hm_loss #+ 0.1 * wh_loss + \
-          # off_loss
+    loss = hm_loss + 0.1 * wh_loss + \
+          off_loss
     loss_stats = {'loss': loss, 'hm_loss': hm_loss,
                   'wh_loss': wh_loss, 'off_loss': off_loss}
     return loss, loss_stats

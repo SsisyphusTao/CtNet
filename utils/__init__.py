@@ -1,5 +1,6 @@
 from .ctdet import CTDetDataset
 from .pascal import PascalVOC
+from .coco import COCO
 import torch
 
 def get_dataset():
