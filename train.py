@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(
 train_set = parser.add_mutually_exclusive_group()
 parser.add_argument('--dataset_root', default=osp.join(osp.expanduser('~'),'data'),
                     help='Path of training set')
-parser.add_argument('--batch_size', default=32, type=int,
+parser.add_argument('--batch_size', default=128, type=int,
                     help='Batch size for training')
 parser.add_argument('--resume', type=str,
                     help='Checkpoint state_dict file to resume training from')
@@ -22,7 +22,7 @@ parser.add_argument('--epochs', default=70, type=int,
                     help='the number of training epochs')
 parser.add_argument('--start_iter', default=0, type=int,
                     help='Resume training at this iter')
-parser.add_argument('--num_workers', default=16, type=int,
+parser.add_argument('--num_workers', default=32, type=int,
                     help='Number of workers used in dataloading')
 parser.add_argument('--lr', '--learning-rate', default=1.25e-4, type=float,
                     help='initial learning rate')
@@ -71,7 +71,7 @@ def train():
         if unexpected:
             print('Unexpected:', unexpected)
     net.train()
-    net = nn.DataParallel(net.cuda(), device_ids=[0,1])
+    net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3])
     torch.backends.cudnn.benchmark = True
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
@@ -81,14 +81,13 @@ def train():
         param_group['initial_lr'] = args.lr
     adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [45, 60], 0.1, args.start_iter)
     # adjust_learning_rate = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, args.start_iter)
-    criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1])
+    criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1,2,3])
 
     print('Loading the dataset...')
     print('Training CenterNet on:', dataset.name)
     print('Using the specified args:')
     print(args)
 
-    step_index = 0
     data_loader = data.DataLoader(dataset(args.dataset_root, 'train'), args.batch_size,
                                   num_workers=args.num_workers,
                                   shuffle=True, collate_fn=detection_collate,
