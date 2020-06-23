@@ -1,10 +1,13 @@
+#%%
 import torch
 import cv2 as cv
+from PIL import Image
 import numpy as np
 from nets.pose_dla_dcn import get_pose_net
 from utils.image import get_affine_transform, transform_preds
 from loss import _transpose_and_gather_feat, _gather_feat
 
+#%%
 heads = {'hm': 20,
             'wh': 2,
             'reg': 2}
@@ -12,80 +15,19 @@ mean = np.array([0.485, 0.456, 0.406],
                 dtype=np.float32).reshape(1, 1, 3)
 std  = np.array([0.229, 0.224, 0.225],
                 dtype=np.float32).reshape(1, 1, 3)
+class_name = ['__background__', "aeroplane", "bicycle", "bird", "boat",
+     "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", 
+     "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", 
+     "train", "tvmonitor"]
 
-def load_model(model, model_path, optimizer=None, resume=False, 
-               lr=None, lr_step=None):
-  start_epoch = 0
-  checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
-  print('loaded {}, epoch {}'.format(model_path, checkpoint['epoch']))
-  state_dict_ = checkpoint['state_dict']
-  state_dict = {}
-  
-  # convert data_parallal to model
-  for k in state_dict_:
-    if k.startswith('module') and not k.startswith('module_list'):
-      state_dict[k[7:]] = state_dict_[k]
-    else:
-      state_dict[k] = state_dict_[k]
-  model_state_dict = model.state_dict()
-
-  # check loaded parameters and created model parameters
-  msg = 'If you see this, your model does not fully load the ' + \
-        'pre-trained weight. Please make sure ' + \
-        'you have correctly specified --arch xxx ' + \
-        'or set the correct --num_classes for your own dataset.'
-  for k in state_dict:
-    if k in model_state_dict:
-      if state_dict[k].shape != model_state_dict[k].shape:
-        print('Skip loading parameter {}, required shape{}, '\
-              'loaded shape{}. {}'.format(
-          k, model_state_dict[k].shape, state_dict[k].shape, msg))
-        state_dict[k] = model_state_dict[k]
-    else:
-      print('Drop parameter {}.'.format(k) + msg)
-  for k in model_state_dict:
-    if not (k in state_dict):
-      print('No param {}.'.format(k) + msg)
-      state_dict[k] = model_state_dict[k]
-  model.load_state_dict(state_dict, strict=False)
-
-  # resume optimizer parameters
-  if optimizer is not None and resume:
-    if 'optimizer' in checkpoint:
-      optimizer.load_state_dict(checkpoint['optimizer'])
-      start_epoch = checkpoint['epoch']
-      start_lr = lr
-      for step in lr_step:
-        if start_epoch >= step:
-          start_lr *= 0.1
-      for param_group in optimizer.param_groups:
-        param_group['lr'] = start_lr
-      print('Resumed optimizer with start lr', start_lr)
-    else:
-      print('No optimizer parameters in checkpoint.')
-  if optimizer is not None:
-    return model, optimizer, start_epoch
-  else:
-    return model
-
-net = get_pose_net(34, heads).cuda()
-net.load_state_dict({k.replace('module.',''):v 
-        for k,v in torch.load('ctnet_dla_end_667.pth').items()}, strict=False)
-# net = load_model(net, 'ctdet_pascal_resdcn18_384.pth')
-net.eval()
 def pre_process(image, scale, meta=None):
     height, width = image.shape[0:2]
     new_height = int(height * scale)
     new_width  = int(width * scale)
-    if 1:
-      inp_height, inp_width = 384, 384
-      c = np.array([new_width / 2., new_height / 2.], dtype=np.float32)
-      s = max(height, width) * 1.0
-    else:
-      inp_height = (new_height | 31) + 1
-      inp_width = (new_width | 31) + 1
-      c = np.array([new_width // 2, new_height // 2], dtype=np.float32)
-      s = np.array([inp_width, inp_height], dtype=np.float32)
+
+    inp_height, inp_width = 384, 384
+    c = np.array([new_width / 2., new_height / 2.], dtype=np.float32)
+    s = max(height, width) * 1.0
 
     trans_input = get_affine_transform(c, s, 0, [inp_width, inp_height])
     resized_image = cv.resize(image, (new_width, new_height))
@@ -93,23 +35,12 @@ def pre_process(image, scale, meta=None):
       resized_image, trans_input, (inp_width, inp_height),
       flags=cv.INTER_LINEAR)
     inp_image = ((inp_image / 255. - mean) / std).astype(np.float32)
-
     images = inp_image.transpose(2, 0, 1).reshape(1, 3, inp_height, inp_width)
     images = torch.from_numpy(images)
     meta = {'c': c, 's': s, 
             'out_height': inp_height // 4, 
             'out_width': inp_width // 4}
-    print(images.size())
     return images.cuda(), meta
-
-img = cv.imread('sheep-on-green-grass.jpg')
-img, meta = pre_process(img, 1)
-
-print(img)
-output = net(img)
-hm = output[-1]['hm'].sigmoid_()#.detach().cpu().numpy()[0]
-wh = output[0]['wh']
-reg = output[0]['reg']
 
 def _nms(heat, kernel=3):
     pad = (kernel - 1) // 2
@@ -167,7 +98,6 @@ def ctdet_decode(heat, wh, reg=None, cat_spec_wh=False, K=100):
                         xs + wh[..., 0:1] / 2, 
                         ys + wh[..., 1:2] / 2], dim=2)
     detections = torch.cat([bboxes, scores, clses], dim=2)
-    print(torch.cat([scores, clses], dim=2)[0][0:10])
     return detections
 
 def ctdet_post_process(dets, c, s, h, w, num_classes):
@@ -204,6 +134,21 @@ def merge_outputs(detections):
         results[j] = results[j][keep_inds]
     return results
 
+#%%
+net = get_pose_net(34, heads).cuda()
+net.load_state_dict({k.replace('module.',''):v 
+        for k,v in torch.load('ctnet_dla_end_667.pth').items()}, strict=False)
+net.eval()
+
+#%%
+img = cv.imread('sheep-on-green-grass.jpg')
+x, meta = pre_process(img, 1)
+
+output = net(x)
+hm = output[-1]['hm'].sigmoid_()#.detach().cpu().numpy()[0]
+wh = output[0]['wh']
+reg = output[0]['reg']
+
 dets = ctdet_decode(hm, wh, reg)
 dets = dets.detach().cpu().numpy()
 dets = dets.reshape(1, -1, dets.shape[2])
@@ -213,5 +158,14 @@ dets = ctdet_post_process(
 for j in range(1, 20 + 1):
     dets[0][j] = np.array(dets[0][j], dtype=np.float32).reshape(-1, 5)
 dets = merge_outputs([dets[0]])
-# print(dets.keys())
-# print(dets[0][1])
+
+for i in dets:
+  for j in dets[i]:
+    if j[-1] > 0.8:
+      cv.rectangle(img, (j[0], j[1]), (j[2], j[3]), 255, 3)
+
+
+image = Image.fromarray(cv.cvtColor(img,cv.COLOR_BGR2RGB))
+display(image)
+
+# %%
