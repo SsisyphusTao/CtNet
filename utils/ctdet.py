@@ -110,4 +110,9 @@ class CTDetDataset(data.Dataset):
 
         gt_det.append([ct[0] - w / 2, ct[1] - h / 2, 
                        ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
-    return inp, hm, reg_mask, ind, wh, reg
+
+    if self.split == 'train':
+      return inp, hm, reg_mask, ind, wh, reg
+    else:
+      meta = {'c': c, 's': s, 'gt_det': gt_det, 'img_id': img_id}
+      return inp, meta

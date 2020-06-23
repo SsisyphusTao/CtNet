@@ -166,6 +166,6 @@ for i in dets:
 
 
 image = Image.fromarray(cv.cvtColor(img,cv.COLOR_BGR2RGB))
-display(image)
+# display(image)
 
 # %%
