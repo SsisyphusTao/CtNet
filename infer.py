@@ -135,37 +135,38 @@ def merge_outputs(detections):
     return results
 
 #%%
-net = get_pose_net(34, heads).cuda()
-net.load_state_dict({k.replace('module.',''):v 
-        for k,v in torch.load('ctnet_dla_end_667.pth').items()}, strict=False)
-net.eval()
+if __name__ == "__main__":
+  net = get_pose_net(34, heads).cuda()
+  net.load_state_dict({k.replace('module.',''):v 
+          for k,v in torch.load('ctnet_dla_end_667.pth').items()})
+  net.eval()
 
-#%%
-img = cv.imread('sheep-on-green-grass.jpg')
-x, meta = pre_process(img, 1)
+  #%%
+  img = cv.imread('sheep-on-green-grass.jpg')
+  x, meta = pre_process(img, 1)
 
-output = net(x)
-hm = output[-1]['hm'].sigmoid_()#.detach().cpu().numpy()[0]
-wh = output[0]['wh']
-reg = output[0]['reg']
+  output = net(x)
+  hm = output[-1]['hm'].sigmoid_()#.detach().cpu().numpy()[0]
+  wh = output[0]['wh']
+  reg = output[0]['reg']
 
-dets = ctdet_decode(hm, wh, reg)
-dets = dets.detach().cpu().numpy()
-dets = dets.reshape(1, -1, dets.shape[2])
-dets = ctdet_post_process(
-      dets.copy(), [meta['c']], [meta['s']],
-      meta['out_height'], meta['out_width'], 20)
-for j in range(1, 20 + 1):
-    dets[0][j] = np.array(dets[0][j], dtype=np.float32).reshape(-1, 5)
-dets = merge_outputs([dets[0]])
+  dets = ctdet_decode(hm, wh, reg)
+  dets = dets.detach().cpu().numpy()
+  dets = dets.reshape(1, -1, dets.shape[2])
+  dets = ctdet_post_process(
+        dets.copy(), [meta['c']], [meta['s']],
+        meta['out_height'], meta['out_width'], 20)
+  for j in range(1, 20 + 1):
+      dets[0][j] = np.array(dets[0][j], dtype=np.float32).reshape(-1, 5)
+  dets = merge_outputs([dets[0]])
 
-for i in dets:
-  for j in dets[i]:
-    if j[-1] > 0.8:
-      cv.rectangle(img, (j[0], j[1]), (j[2], j[3]), 255, 3)
+  for i in dets:
+    for j in dets[i]:
+      if j[-1] > 0.8:
+        cv.rectangle(img, (j[0], j[1]), (j[2], j[3]), 255, 3)
 
 
-image = Image.fromarray(cv.cvtColor(img,cv.COLOR_BGR2RGB))
-# display(image)
+  image = Image.fromarray(cv.cvtColor(img,cv.COLOR_BGR2RGB))
+  display(image)
 
 # %%
