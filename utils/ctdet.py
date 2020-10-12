@@ -14,6 +14,29 @@ from utils.image import gaussian_radius, draw_umich_gaussian, draw_msra_gaussian
 from utils.image import draw_dense_reg
 import math
 
+def pre_process(image, scale, mean, std, meta=None):
+    height, width = image.shape[0:2]
+    new_height = int(height * scale)
+    new_width  = int(width * scale)
+    inp_height = (new_height | 31) + 1
+    inp_width = (new_width | 31) + 1
+    c = np.array([new_width // 2, new_height // 2], dtype=np.float32)
+    s = np.array([inp_width, inp_height], dtype=np.float32)
+
+    trans_input = get_affine_transform(c, s, 0, [inp_width, inp_height])
+    resized_image = cv2.resize(image, (new_width, new_height))
+    inp_image = cv2.warpAffine(
+      resized_image, trans_input, (inp_width, inp_height),
+      flags=cv2.INTER_LINEAR)
+    inp_image = ((inp_image / 255. - mean) / std).astype(np.float32)
+    images = inp_image.transpose(2, 0, 1).reshape(1, 3, inp_height, inp_width)
+  
+    images = torch.from_numpy(images)
+    meta = {'c': c, 's': s, 
+            'out_height': inp_height // 4, 
+            'out_width': inp_width // 4}
+    return images, meta
+
 class CTDetDataset(data.Dataset):
   def _coco_box_to_bbox(self, box):
     bbox = np.array([box[0], box[1], box[0] + box[2], box[1] + box[3]],
@@ -35,11 +58,14 @@ class CTDetDataset(data.Dataset):
     num_objs = min(len(anns), self.max_objs)
 
     img = cv2.imread(img_path)
-
+    if not self.split == 'train':
+      inp, meta = pre_process(img, 1, self.mean, self.std)
+      meta['img_id']=img_id
+      return inp, meta
     height, width = img.shape[0], img.shape[1]
     c = np.array([img.shape[1] / 2., img.shape[0] / 2.], dtype=np.float32)
     s = max(img.shape[0], img.shape[1]) * 1.0
-    input_h, input_w = [384, 384]
+    input_h, input_w = [512, 512]
     
     flipped = False
     if self.split == 'train':
@@ -111,8 +137,4 @@ class CTDetDataset(data.Dataset):
         gt_det.append([ct[0] - w / 2, ct[1] - h / 2, 
                        ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
 
-    if self.split == 'train':
-      return inp, hm, reg_mask, ind, wh, reg
-    else:
-      meta = {'c': c, 's': s, 'gt_det': gt_det, 'img_id': img_id}
-      return inp, meta
+    return inp, hm, reg_mask, ind, wh, reg

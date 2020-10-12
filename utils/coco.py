@@ -11,6 +11,7 @@ import os
 import torch.utils.data as data
 
 class COCO(data.Dataset):
+  name='COCO'
   num_classes = 80
   default_resolution = [512, 512]
   mean = np.array([0.40789654, 0.44719302, 0.47026115],
@@ -22,9 +23,14 @@ class COCO(data.Dataset):
     super(COCO, self).__init__()
     self.data_dir = os.path.join(data_dir, 'coco')
     self.img_dir = os.path.join(self.data_dir, '{}2017'.format(split))
-    self.annot_path = os.path.join(
-      self.data_dir, 'annotations', 
-      'instances_{}2017.json').format(split)
+    if split == 'test':
+      self.annot_path = os.path.join(
+          self.data_dir, 'annotations', 
+          'image_info_test-dev2017.json').format(split)
+    else:
+      self.annot_path = os.path.join(
+        self.data_dir, 'annotations', 
+        'instances_{}2017.json').format(split)
     self.max_objs = 128
     self.class_name = [
       '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane',
@@ -116,4 +122,3 @@ class COCO(data.Dataset):
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
-  name = "COCO"

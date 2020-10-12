@@ -44,7 +44,7 @@ def _topk_channel(scores, K=40):
       topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), K)
 
       topk_inds = topk_inds % (height * width)
-      topk_ys   = (topk_inds / width).int().float()
+      topk_ys   = (topk_inds.true_divide(width)).int().float()
       topk_xs   = (topk_inds % width).int().float()
 
       return topk_scores, topk_inds, topk_ys, topk_xs
@@ -193,45 +193,73 @@ def load_model(model, model_path, optimizer=None, resume=False,
   else:
     return model
 
-#%%
-net = get_pose_net(34, heads).cuda()
-# net.load_state_dict({k.replace('module.',''):v 
-#         for k,v in torch.load('multi_pose_dla_3x.pth').items()})
-load_model(net, 'multi_pose_dla_3x.pth')
-net.eval()
-img = cv.imread('mango.jpg')
-x, meta = pre_process(img, 1)
-output = net(x)[0]
+if __name__ == '__main__':
+  net = get_pose_net(34, heads).cuda()
+  # net.load_state_dict({k.replace('module.',''):v 
+  #         for k,v in torch.load('multi_pose_dla_3x.pth').items()})
+  load_model(net, 'multi_pose_dla_3x.pth')
+  net.eval()
+  img = cv.imread('cxk.jpeg')
+  x, meta = pre_process(img, 1)
+  output = net(x)[0]
 
-#%%
-with torch.no_grad():
-    output['hm'].sigmoid_()
-    output['hm_hp'].sigmoid_()
+  with torch.no_grad():
+      output['hm'].sigmoid_()
+      output['hm_hp'].sigmoid_()
 
-    reg = output['reg']
-    hm_hp = output['hm_hp']
-    hp_offset = output['hp_offset']
+      reg = output['reg']
+      hm_hp = output['hm_hp']
+      hp_offset = output['hp_offset']
 
-    dets = multi_pose_decode(
-            output['hm'], output['wh'], output['hps'],
-            reg=reg, hm_hp=hm_hp, hp_offset=hp_offset, K=100)
+      dets = multi_pose_decode(
+              output['hm'], output['wh'], output['hps'],
+              reg=reg, hm_hp=hm_hp, hp_offset=hp_offset, K=100)
 
-#%%
-dets = multi_pose_post_process(
-    dets.cpu().numpy(), [meta['c']], [meta['s']],
-    meta['out_height'], meta['out_width'])
-result = np.array(dets[0][1], dtype=np.float32).reshape(-1, 39)
+  dets = multi_pose_post_process(
+      dets.cpu().numpy(), [meta['c']], [meta['s']],
+      meta['out_height'], meta['out_width'])
+  result = np.array(dets[0][1], dtype=np.float32).reshape(-1, 39)
 
-# %%
-for s in result:
-  if s[4] > 0.5:
-    r = np.random.randint(50,200)
-    g = np.random.randint(50,200)
-    b = np.random.randint(50,200)
-    for i in range(17):
-      cv.circle(img, (s[5+i*2], s[5+2*i+1]), 8, (b,g,r), -1)
-cv.imwrite('output.jpg', img)
-# plt.axis('off')
-# plt.imshow(Image.fromarray(cv.cvtColor(img, cv.COLOR_BGR2RGB)))
-# plt.show
-# %%
+  for s in result:
+    if s[4] > 0.5:
+      # r = np.random.randint(50,200)
+      # g = np.random.randint(50,200)
+      # b = np.random.randint(50,200)
+      p = lambda i :(s[5+i*2], s[5+2*i+1])
+      l = lambda a,b:cv.line(img, p(a), p(b), (0,0,255),2)
+      for i in range(17):
+        cv.circle(img, (s[5+i*2], s[5+2*i+1]), 3, (0,0,255), -1)
+        # cv.putText(img, str(i), (s[5+i*2], s[5+2*i+1]), 0, 0.3, (0,0,255))
+      l(0,1)
+      l(0,2)
+      l(1,3)
+      l(2,4)
+      l(5,6)
+      l(5,7)
+      l(7,9)
+      l(6,8)
+      l(8,10)
+      l(11,12)
+      l(11,13)
+      l(13,15)
+      l(12,14)
+      l(14,16)
+
+      neck = (int((p(5)[0]+p(6)[0])*0.5), int((p(5)[1]+p(6)[1])*0.5))
+      belly = (int((p(11)[0]+p(12)[0])*0.5), int((p(12)[1]+p(12)[1])*0.5))
+      cv.line(img, p(0), neck, (0,0,255),2)
+      cv.line(img, neck, belly, (0,0,255),2)
+
+  cv.imwrite('output.jpg', img)
+""" 
+0:   nose
+1,2: eyes
+3,4: ears
+5,6: shoulders
+7,8: elbows
+9,10:wrists
+11,12:hips
+13,14:knees
+15,16:ankles
+from right to left
+"""

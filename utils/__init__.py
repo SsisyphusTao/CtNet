@@ -1,10 +1,10 @@
 from .ctdet import CTDetDataset
 from .pascal import PascalVOC
-from cocotask.coco import COCO
+from .coco import COCO
 import torch
 
 def get_dataset():
-    class dataset(CTDetDataset, PascalVOC):
+    class dataset(CTDetDataset, COCO):
         pass
     return dataset
 
@@ -46,7 +46,7 @@ def val_collate(batch):
     inp = []
     meta = []
     for sample in batch:
-        inp.append(torch.from_numpy(sample[0]))
+        inp.append(sample[0])
         meta.append(sample[1])
-    return {'input': torch.stack(inp,0),
+    return {'input': torch.cat(inp,0),
         'meta': meta}

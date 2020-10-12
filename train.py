@@ -12,19 +12,19 @@ import os.path as osp
 parser = argparse.ArgumentParser(
     description='CenterNet task')
 train_set = parser.add_mutually_exclusive_group()
-parser.add_argument('--dataset_root', default=osp.join(osp.expanduser('~'),'data'),
+parser.add_argument('--dataset_root', default='/ai/ailab/Share/TaoData/',
                     help='Path of training set')
 parser.add_argument('--batch_size', default=128, type=int,
                     help='Batch size for training')
 parser.add_argument('--resume', type=str,
                     help='Checkpoint state_dict file to resume training from')
-parser.add_argument('--epochs', default=70, type=int,
+parser.add_argument('--epochs', default=230, type=int,
                     help='the number of training epochs')
 parser.add_argument('--start_iter', default=0, type=int,
                     help='Resume training at this iter')
-parser.add_argument('--num_workers', default=32, type=int,
+parser.add_argument('--num_workers', default=8, type=int,
                     help='Number of workers used in dataloading')
-parser.add_argument('--lr', '--learning-rate', default=1.25e-4, type=float,
+parser.add_argument('--lr', '--learning-rate', default=5e-4, type=float,
                     help='initial learning rate')
 parser.add_argument('--save_folder', default='checkpoints/',
                     help='Directory for saving checkpoint models')
@@ -57,7 +57,6 @@ def train_one_epoch(loader, net, criterion, optimizer, epoch):
     return '_%d' % (loss_amount/iteration*1000)
 
 def train():
-    start_time = time.time()
     dataset = get_dataset()
     heads = {'hm': dataset.num_classes,
              'wh': 2,
@@ -65,13 +64,13 @@ def train():
     net = get_pose_net(34, heads)
     if args.resume:
         missing, unexpected = net.load_state_dict({k.replace('module.',''):v 
-        for k,v in torch.load(args.resume).items()})
+        for k,v in torch.load(args.resume, map_location='cpu').items()})
         if missing:
             print('Missing:', missing)
         if unexpected:
             print('Unexpected:', unexpected)
     net.train()
-    net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3])
+    net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3,4,5,6,7])
     torch.backends.cudnn.benchmark = True
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
@@ -79,9 +78,9 @@ def train():
     #                       weight_decay=5e-4)
     for param_group in optimizer.param_groups:
         param_group['initial_lr'] = args.lr
-    adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [45, 60], 0.1, args.start_iter)
+    adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [180, 210], 0.1, args.start_iter)
     # adjust_learning_rate = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, args.start_iter)
-    criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1,2,3])
+    criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1,2,3,4,5,6,7])
 
     print('Loading the dataset...')
     print('Training CenterNet on:', dataset.name)
@@ -103,8 +102,6 @@ def train():
                        repr(iteration) + loss + '.pth')
     torch.save(net.state_dict(),
                 args.save_folder + 'ctnet_dla_end' + loss + '.pth')
-    end_time=time.time()
-    print('Time spend: %d' % (time.gmtime(end_time).tm_yday-time.gmtime(start_time).tm_yday), time.strftime('%H:%M:%S', time.gmtime(end_time-start_time)))
 
 if __name__ == '__main__':
     train()
