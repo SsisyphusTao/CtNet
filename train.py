@@ -16,9 +16,9 @@ parser.add_argument('--dataset_root', default='/ai/ailab/Share/TaoData/',
                     help='Path of training set')
 parser.add_argument('--batch_size', default=128, type=int,
                     help='Batch size for training')
-parser.add_argument('--resume', type=str,
+parser.add_argument('--resume', type=str, default='checkpoints/ctnet_dla_end_1484.pth',
                     help='Checkpoint state_dict file to resume training from')
-parser.add_argument('--epochs', default=230, type=int,
+parser.add_argument('--epochs', default=140, type=int,
                     help='the number of training epochs')
 parser.add_argument('--start_iter', default=0, type=int,
                     help='Resume training at this iter')
@@ -26,7 +26,7 @@ parser.add_argument('--num_workers', default=8, type=int,
                     help='Number of workers used in dataloading')
 parser.add_argument('--lr', '--learning-rate', default=5e-4, type=float,
                     help='initial learning rate')
-parser.add_argument('--save_folder', default='checkpoints/',
+parser.add_argument('--save_folder', default='instances/',
                     help='Directory for saving checkpoint models')
 args = parser.parse_args()
 torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -40,10 +40,10 @@ def train_one_epoch(loader, net, criterion, optimizer, epoch):
         for k in batch:
             batch[k] = batch[k].cuda(non_blocking=True)  
         # forward
-        predictions = net(batch['input'])
+        # predictions = net(batch['input'])
         # backprop
         optimizer.zero_grad()
-        loss, loss_state = criterion(predictions, batch)
+        loss, loss_state = criterion(batch['input'], batch)
         loss = loss.mean()
         loss.backward()
         optimizer.step()
@@ -59,28 +59,28 @@ def train_one_epoch(loader, net, criterion, optimizer, epoch):
 def train():
     dataset = get_dataset()
     heads = {'hm': dataset.num_classes,
-             'wh': 2,
+             'gd': 2,
              'reg': 2}
     net = get_pose_net(34, heads)
     if args.resume:
         missing, unexpected = net.load_state_dict({k.replace('module.',''):v 
-        for k,v in torch.load(args.resume, map_location='cpu').items()})
+        for k,v in torch.load(args.resume, map_location='cpu').items()}, strict=False)
         if missing:
             print('Missing:', missing)
         if unexpected:
             print('Unexpected:', unexpected)
     net.train()
-    net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3,4,5,6,7])
+    # net = nn.DataParallel(net.cuda(), device_ids=[0,1,2,3,4,5,6,7])
     torch.backends.cudnn.benchmark = True
 
-    optimizer = optim.Adam(net.parameters(), lr=args.lr)
-    # optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9,
-    #                       weight_decay=5e-4)
+    # optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9,
+                          weight_decay=1e-4)
     for param_group in optimizer.param_groups:
         param_group['initial_lr'] = args.lr
-    adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [180, 210], 0.1, args.start_iter)
+    adjust_learning_rate = optim.lr_scheduler.MultiStepLR(optimizer, [90, 120], 0.1, args.start_iter)
     # adjust_learning_rate = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, args.start_iter)
-    criterion = nn.DataParallel(CtdetLoss().cuda(), device_ids=[0,1,2,3,4,5,6,7])
+    criterion = nn.DataParallel(CtdetLoss(net).cuda(), device_ids=[0,1,2,3,4,5,6,7])
 
     print('Loading the dataset...')
     print('Training CenterNet on:', dataset.name)
@@ -93,15 +93,13 @@ def train():
                                   pin_memory=True)
 
     # create batch iterator
-    for iteration in range(args.start_iter + 1, args.epochs):
+    for iteration in range(args.start_iter + 1, args.epochs + 1):
         loss = train_one_epoch(data_loader, net, criterion, optimizer, iteration)
         adjust_learning_rate.step()
-        if (not (iteration-args.start_iter) == 0 and iteration % 5 == 0):
+        if (not (iteration-args.start_iter) == 0 and iteration % 1 == 0):
             print('Saving state, iter:', iteration)
-            torch.save(net.state_dict(), args.save_folder + 'ctnet_dla_' +
+            torch.save(net.state_dict(), args.save_folder + 'instance_dla_' +
                        repr(iteration) + loss + '.pth')
-    torch.save(net.state_dict(),
-                args.save_folder + 'ctnet_dla_end' + loss + '.pth')
 
 if __name__ == '__main__':
     train()

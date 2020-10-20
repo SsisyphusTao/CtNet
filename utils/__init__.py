@@ -27,20 +27,24 @@ def detection_collate(batch):
     ind = []
     wh = []
     reg = []
+    grad = []
 
     for sample in batch:
         inp.append(torch.from_numpy(sample[0]))
         hm.append(torch.from_numpy(sample[1]))
         reg_mask.append(torch.from_numpy(sample[2]))
         ind.append(torch.from_numpy(sample[3]))
-        wh.append(torch.from_numpy(sample[4]))
+        # wh.append(torch.from_numpy(sample[4]))
         reg.append(torch.from_numpy(sample[5]))
+        grad.append(torch.from_numpy(sample[6]))
+
     return {'input': torch.stack(inp,0),
             'hm': torch.stack(hm, 0),
             'reg_mask': torch.stack(reg_mask, 0),
             'ind': torch.stack(ind, 0),
-            'wh': torch.stack(wh, 0),
-            'reg': torch.stack(reg, 0)}
+            # 'wh': torch.stack(wh, 0),
+            'reg': torch.stack(reg, 0),
+            'grad': torch.stack(grad, 0).permute(0,3,1,2)}
 
 def val_collate(batch):
     inp = []

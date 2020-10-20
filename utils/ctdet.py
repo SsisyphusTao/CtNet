@@ -36,7 +36,9 @@ def pre_process(image, scale, mean, std, meta=None):
             'out_height': inp_height // 4, 
             'out_width': inp_width // 4}
     return images, meta
-
+reverse = lambda x : x[...,2]*100+x[...,1]*10+x[...,0]
+x = np.expand_dims(np.array([x for x in range(512)]), 0).repeat(512, 0)
+y = np.expand_dims(np.array([x for x in range(512)]), 1).repeat(512, 1)
 class CTDetDataset(data.Dataset):
   def _coco_box_to_bbox(self, box):
     bbox = np.array([box[0], box[1], box[0] + box[2], box[1] + box[3]],
@@ -53,6 +55,8 @@ class CTDetDataset(data.Dataset):
     img_id = self.images[index]
     file_name = self.coco.loadImgs(ids=[img_id])[0]['file_name']
     img_path = os.path.join(self.img_dir, file_name)
+    gx_path = os.path.join(self.data_dir, 'panoptic', 'converted', 'gx', file_name.replace('jpg', 'png'))
+    gy_path = os.path.join(self.data_dir, 'panoptic', 'converted', 'gy', file_name.replace('jpg', 'png'))
     ann_ids = self.coco.getAnnIds(imgIds=[img_id])
     anns = self.coco.loadAnns(ids=ann_ids)
     num_objs = min(len(anns), self.max_objs)
@@ -62,6 +66,9 @@ class CTDetDataset(data.Dataset):
       inp, meta = pre_process(img, 1, self.mean, self.std)
       meta['img_id']=img_id
       return inp, meta
+    gx = cv2.imread(gx_path)
+    gy = cv2.imread(gy_path)
+
     height, width = img.shape[0], img.shape[1]
     c = np.array([img.shape[1] / 2., img.shape[0] / 2.], dtype=np.float32)
     s = max(img.shape[0], img.shape[1]) * 1.0
@@ -78,6 +85,8 @@ class CTDetDataset(data.Dataset):
       if np.random.random() < 0.5:
         flipped = True
         img = img[:, ::-1, :]
+        gx = gx[:, ::-1]
+        gy = gy[:, ::-1]
         c[0] =  width - c[0] - 1
         
 
@@ -86,6 +95,16 @@ class CTDetDataset(data.Dataset):
     inp = cv2.warpAffine(img, trans_input, 
                          (input_w, input_h),
                          flags=cv2.INTER_LINEAR)
+    gx = cv2.warpAffine(gx, trans_input, 
+                      (input_w, input_h),
+                      flags=cv2.INTER_NEAREST)
+    gy = cv2.warpAffine(gy, trans_input, 
+                      (input_w, input_h),
+                      flags=cv2.INTER_NEAREST)
+    gx = reverse(gx.astype(np.float32))
+    gy = reverse(gy.astype(np.float32))
+    grad = np.stack([gx,gy, np.ones_like(gx)],-1)
+
     inp = (inp.astype(np.float32) / 255.)
     if self.split == 'train':
       color_aug(self._data_rng, inp, self._eig_val, self._eig_vec)
@@ -96,6 +115,15 @@ class CTDetDataset(data.Dataset):
     output_w = input_w // 4
     num_classes = self.num_classes
     trans_output = get_affine_transform(c, s, 0, [output_w, output_h])
+
+    t = get_affine_transform(c, s, 0, [input_w, input_h])
+    if flipped:
+        grad[...,0] = width - grad[...,0] - 1
+    grad = np.einsum("ij,...j->...i", t, grad)
+    grad = np.clip(grad, 0, 511)
+    grad[...,0] -= x
+    grad[...,1] -= y
+    grad[np.where((gx+gy)==0)] = [0,0]
 
     hm = np.zeros((num_classes, output_h, output_w), dtype=np.float32)
     wh = np.zeros((self.max_objs, 2), dtype=np.float32)
@@ -137,4 +165,4 @@ class CTDetDataset(data.Dataset):
         gt_det.append([ct[0] - w / 2, ct[1] - h / 2, 
                        ct[0] + w / 2, ct[1] + h / 2, 1, cls_id])
 
-    return inp, hm, reg_mask, ind, wh, reg
+    return inp, hm, reg_mask, ind, wh, reg, grad

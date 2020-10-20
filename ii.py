@@ -1,0 +1,252 @@
+import torch
+import cv2 as cv
+from PIL import Image
+import numpy as np
+from nets.pose_dla_dcn import get_pose_net
+from utils.image import get_affine_transform, transform_preds, affine_transform
+from loss import _transpose_and_gather_feat, _gather_feat
+import json
+
+heads = {'hm': 80,
+            'gd': 2,
+            'reg': 2}
+mean = np.array([0.485, 0.456, 0.406],
+                dtype=np.float32).reshape(1, 1, 3)
+std  = np.array([0.229, 0.224, 0.225],
+                dtype=np.float32).reshape(1, 1, 3)
+
+def pre_process(image, scale, meta=None):
+    height, width = image.shape[0:2]
+    new_height = int(height * scale)
+    new_width  = int(width * scale)
+    inp_height = (new_height | 31) + 1
+    inp_width = (new_width | 31) + 1
+    c = np.array([new_width // 2, new_height // 2], dtype=np.float32)
+    s = np.array([inp_width, inp_height], dtype=np.float32)
+
+    trans_input = get_affine_transform(c, s, 0, [inp_width, inp_height])
+    resized_image = cv.resize(image, (new_width, new_height))
+    inp_image = cv.warpAffine(
+      resized_image, trans_input, (inp_width, inp_height),
+      flags=cv.INTER_LINEAR)
+    inp_image = ((inp_image / 255. - mean) / std).astype(np.float32)
+    images = inp_image.transpose(2, 0, 1).reshape(1, 3, inp_height, inp_width)
+  
+    images = torch.from_numpy(images)
+    meta = {'c': c, 's': s, 
+            'out_height': inp_height // 4, 
+            'out_width': inp_width // 4}
+    return images.cuda(), meta
+
+def _nms(heat, kernel=3):
+    pad = (kernel - 1) // 2
+
+    hmax = torch.nn.functional.max_pool2d(
+        heat, (kernel, kernel), stride=1, padding=pad)
+    keep = (hmax == heat).float()
+    return heat * keep
+
+def _topk(scores, K=40):
+    batch, cat, height, width = scores.size()
+      
+    topk_scores, topk_inds = torch.topk(scores.view(batch, cat, -1), K)
+
+    topk_inds = topk_inds % (height * width)
+    topk_ys   = (topk_inds.true_divide(width)).int().float()
+    topk_xs   = (topk_inds % width).int().float()
+      
+    topk_score, topk_ind = torch.topk(topk_scores.view(batch, -1), K)
+    topk_clses = (topk_ind.true_divide(K)).int()
+    topk_inds = _gather_feat(
+        topk_inds.view(batch, -1, 1), topk_ind).view(batch, K)
+    topk_ys = _gather_feat(topk_ys.view(batch, -1, 1), topk_ind).view(batch, K)
+    topk_xs = _gather_feat(topk_xs.view(batch, -1, 1), topk_ind).view(batch, K)
+
+    return topk_score, topk_inds, topk_clses, topk_ys, topk_xs
+
+def ctdet_decode(heat, wh, reg=None, cat_spec_wh=False, K=100):
+    batch, cat, height, width = heat.size()
+
+    # heat = torch.sigmoid(heat)
+    # perform nms on heatmaps
+    heat = _nms(heat)
+      
+    scores, inds, clses, ys, xs = _topk(heat, K=K)
+    if reg is not None:
+      reg = _transpose_and_gather_feat(reg, inds)
+      reg = reg.view(batch, K, 2)
+      xs = xs.view(batch, K, 1) + reg[:, :, 0:1]
+      ys = ys.view(batch, K, 1) + reg[:, :, 1:2]
+    else:
+      xs = xs.view(batch, K, 1) + 0.5
+      ys = ys.view(batch, K, 1) + 0.5
+
+    clses  = clses.view(batch, K, 1).float()
+    scores = scores.view(batch, K, 1)
+    ct = torch.cat([xs, ys], dim=2)
+
+    detections = torch.cat([ct, scores, clses], dim=2)
+    return detections
+
+def ctdet_post_process(dets, c, s, h, w, num_classes):
+  # dets: batch x max_dets x dim
+  # return 1-based class det dict
+  ret = []
+  for i in range(dets.shape[0]):
+    top_preds = {}
+    dets[i, :, :2] = transform_preds(
+          dets[i, :, 0:2], c[i], s[i], (w, h))
+    dets[i, :, 2:4] = transform_preds(
+          dets[i, :, 2:4], c[i], s[i], (w, h))
+    classes = dets[i, :, -1]
+    for j in range(num_classes):
+      inds = (classes == j)
+      top_preds[j + 1] = np.concatenate([
+        dets[i, inds, :4].astype(np.float32),
+        dets[i, inds, 4:5].astype(np.float32)], axis=1).tolist()
+    ret.append(top_preds)
+  return ret
+
+def merge_outputs(detections):
+    results = {}
+    for j in range(1, 80 + 1):
+      results[j] = np.concatenate(
+        [detection[j] for detection in detections], axis=0).astype(np.float32)
+    scores = np.hstack(
+      [results[j][:, 4] for j in range(1, 80 + 1)])
+    if len(scores) > 50:
+      kth = len(scores) - 50
+      thresh = np.partition(scores, kth)[kth]
+      for j in range(1, 80 + 1):
+        keep_inds = (results[j][:, 4] >= thresh)
+        results[j] = results[j][keep_inds]
+    return results
+
+def load_model(model, model_path, optimizer=None, resume=False, 
+               lr=None, lr_step=None):
+  start_epoch = 0
+  checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
+  print('loaded {}, epoch {}'.format(model_path, checkpoint['epoch']))
+  state_dict_ = checkpoint['state_dict']
+  state_dict = {}
+  
+  # convert data_parallal to model
+  for k in state_dict_:
+    if k.startswith('module') and not k.startswith('module_list'):
+      state_dict[k[7:]] = state_dict_[k]
+    else:
+      state_dict[k] = state_dict_[k]
+  model_state_dict = model.state_dict()
+
+  # check loaded parameters and created model parameters
+  msg = 'If you see this, your model does not fully load the ' + \
+        'pre-trained weight. Please make sure ' + \
+        'you have correctly specified --arch xxx ' + \
+        'or set the correct --num_classes for your own dataset.'
+  for k in state_dict:
+    if k in model_state_dict:
+      if state_dict[k].shape != model_state_dict[k].shape:
+        print('Skip loading parameter {}, required shape{}, '\
+              'loaded shape{}. {}'.format(
+          k, model_state_dict[k].shape, state_dict[k].shape, msg))
+        state_dict[k] = model_state_dict[k]
+    else:
+      print('Drop parameter {}.'.format(k) + msg)
+  for k in model_state_dict:
+    if not (k in state_dict):
+      print('No param {}.'.format(k) + msg)
+      state_dict[k] = model_state_dict[k]
+  model.load_state_dict(state_dict, strict=False)
+
+  # resume optimizer parameters
+  if optimizer is not None and resume:
+    if 'optimizer' in checkpoint:
+      optimizer.load_state_dict(checkpoint['optimizer'])
+      start_epoch = checkpoint['epoch']
+      start_lr = lr
+      for step in lr_step:
+        if start_epoch >= step:
+          start_lr *= 0.1
+      for param_group in optimizer.param_groups:
+        param_group['lr'] = start_lr
+      print('Resumed optimizer with start lr', start_lr)
+    else:
+      print('No optimizer parameters in checkpoint.')
+  if optimizer is not None:
+    return model, optimizer, start_epoch
+  else:
+    return model
+
+class_name = [
+      '__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane',
+      'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
+      'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
+      'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack',
+      'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
+      'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
+      'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass',
+      'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
+      'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+      'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv',
+      'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+      'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
+      'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+def visualize(c):
+    with open('/ai/ailab/Share/TaoData/coco/panoptic/annotations/panoptic_coco_categories.json') as f:
+        color = json.load(f)
+    text = {}
+    for i, x in enumerate(c):
+        for j, y in enumerate(x):
+            if c[i][j]:
+                text.update({class_name[c[i][j]]: color[c[i][j]-1]['color']})
+                c[i][j] = color[c[i][j]-1]['color']
+            else:
+                c[i][j] = [0, 0, 0]
+    img = np.array(c, dtype=np.uint8)
+    return img, text
+
+if __name__ == "__main__":
+  net = get_pose_net(34, heads).cuda()
+  net.load_state_dict({k.replace('module.',''):v 
+          for k,v in torch.load('instances/instance_dla_29_15641.pth').items()})
+#   load_model(net, 'ctdet_coco_dla_2x.pth')
+  # torch.save(net.state_dict(), 'pretrain_dla.pth')
+  net.eval()
+
+
+  img = cv.imread('/ai/ailab/User/huangtao/Panoptic/images/iceland_sheep.jpg')
+  ratio = 512/min(img.shape[:2])
+  img = cv.resize(img, (int(img.shape[1]*ratio), int(img.shape[0]*ratio)))
+  x, meta = pre_process(img, 1)
+
+  output = net(x)
+  hm = output[-1]['hm'].sigmoid_()#.detach().cpu().numpy()[0]
+  wh = output[0]['gd']
+  reg = output[0]['reg']
+
+  dets = ctdet_decode(hm, wh, reg)
+  dets = dets[0].detach().cpu().numpy()
+  wh = torch.nn.functional.interpolate(wh, size=img.shape[:2], mode='bilinear', align_corners=True)
+  wh = wh[0].permute(1,2,0).detach().cpu().numpy()
+  op = np.zeros(img.shape[:2])
+  x = np.expand_dims(np.array([x for x in range(img.shape[1])]), 0).repeat(img.shape[0], 0)
+  y = np.expand_dims(np.array([x for x in range(img.shape[0])]), 1).repeat(img.shape[1], 1)
+
+  wh[...,0]+=x
+  wh[...,1]+=y
+  # m = get_affine_transform(meta['c'],meta['s'],0, [meta['out_height'],meta['out_width']], inv=1)
+  # wh = np.einsum("ij,...j->...i", m, np.concatenate([wh, np.ones_like(wh[...,:1])],-1))
+  m = get_affine_transform(meta['c'],meta['s'],0, [meta['out_width'],meta['out_height']], inv=1)
+
+  for i in dets:
+      if i[2] > 0.5:
+          i[:2] = affine_transform(i, m)
+          t = np.sqrt(np.power(wh[...,0]-i[0],2)+np.power(wh[...,1]-i[1],2))
+          op[np.where(t<10)] = i[3]+1
+          print(i[-2:])
+
+  op,_ = visualize(op.astype(np.int).tolist())
+  gd = np.sqrt(np.power(wh[...,0],2)+np.power(wh[...,1],2))
+  gd = cv.cvtColor(gd,cv.COLOR_GRAY2RGB).astype(np.uint8)
+
+  cv.imwrite('output.jpg', cv.hconcat([op,gd]))

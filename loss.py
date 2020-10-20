@@ -71,26 +71,32 @@ class RegL1Loss(torch.nn.Module):
     return loss
 
 class CtdetLoss(torch.nn.Module):
-  def __init__(self):
+  def __init__(self, net):
     super(CtdetLoss, self).__init__()
+    self.net = net
     self.crit = FocalLoss()
     self.crit_reg = RegL1Loss()
-    self.crit_wh = self.crit_reg
+    # self.crit_wh = self.crit_reg
+    self.crit_gd = torch.nn.SmoothL1Loss()
 
-  def forward(self, outputs, batch):
+  def forward(self, imgs, batch):
+    outputs = self.net(imgs)
     output = outputs[0]
     output['hm'] = _sigmoid(output['hm'])
 
     hm_loss = self.crit(output['hm'], batch['hm'])
-    wh_loss = self.crit_reg(
-      output['wh'], batch['reg_mask'],
-      batch['ind'], batch['wh'])
+    # wh_loss = self.crit_reg(
+    #   output['wh'], batch['reg_mask'],
+    #   batch['ind'], batch['wh'])
+
+    grad = torch.nn.functional.interpolate(output['gd'], size=[512,512], mode='bilinear', align_corners=True)
+    gd_loss = self.crit_gd(grad, batch['grad'].type(torch.float))
 
     off_loss = self.crit_reg(output['reg'], batch['reg_mask'],
                           batch['ind'], batch['reg'])
         
-    loss = hm_loss + 0.1 * wh_loss + \
+    loss = hm_loss + 1 * gd_loss + \
           off_loss
     loss_stats = {'loss': loss, 'hm_loss': hm_loss,
-                  'wh_loss': wh_loss, 'off_loss': off_loss}
+                  'wh_loss': gd_loss, 'off_loss': off_loss}
     return loss, loss_stats
